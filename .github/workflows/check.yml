@@ -1,0 +1,30 @@
+name: check
+on: [pull_request, push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Syntax
+        run: |
+          bash -n plugin/bin/hq
+          for f in plugin/hooks/*.sh; do bash -n "$f"; done
+          node --check plugin/mcp/server.mjs
+          python3 -c 'import json;[json.load(open(p)) for p in [".claude-plugin/marketplace.json","plugin/.claude-plugin/plugin.json","plugin/hooks/hooks.json"]]'
+      - name: One version everywhere
+        run: |
+          v=$(python3 -c 'import json;print(json.load(open("plugin/.claude-plugin/plugin.json"))["version"])')
+          m=$(python3 -c 'import json;print(json.load(open(".claude-plugin/marketplace.json"))["plugins"][0]["version"])')
+          s=$(grep -o 'VERSION = "[^"]*"' plugin/mcp/server.mjs | cut -d'"' -f2)
+          echo "plugin=$v marketplace=$m server=$s"; [ "$v" = "$m" ] && [ "$v" = "$s" ]
+      - name: Version moves when the plugin changes
+        if: github.event_name == 'pull_request'
+        run: |
+          base=${{ github.event.pull_request.base.sha }}
+          if git diff --quiet "$base" -- plugin/; then echo "plugin unchanged"; exit 0; fi
+          old=$(git show "$base":plugin/.claude-plugin/plugin.json | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')
+          new=$(python3 -c 'import json;print(json.load(open("plugin/.claude-plugin/plugin.json"))["version"])')
+          echo "$old -> $new"; [ "$old" != "$new" ] || { echo "plugin/ changed without a version bump; installed users would never get it"; exit 1; }
